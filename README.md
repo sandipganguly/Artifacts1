@@ -38,7 +38,6 @@ Stage4:
 This stage is implemented with AWS CodeDeploy to deploy the CloudFormation template once all the previous checks are passed. 
 
 
-A sample pipeline with these 4 stages will look like as follows
 
 
  
