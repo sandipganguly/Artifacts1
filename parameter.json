@@ -1,0 +1,9 @@
+{
+    "Parameters" : {
+        "pDBReadCapacity" : "2",
+        "pDBWriteCapacity" : "2",
+        "pPrefix": "myDemo"
+
+    }
+}
+

@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Demo CFN template
+
+Parameters:
+
+  pDBReadCapacity:
+    Description: "Provisioned read capacity units"
+    Type: Number
+    Default: "2"
+
+  pDBWriteCapacity:
+    Type: Number
+    Description: "Provisioned write capacity units"
+    Default: "2"
+
+  pPrefix:
+    Type: String
+    Default: "Demo"
+    Description: "The resource name, created by this template, will be based on this prefix"
+
+Resources:
+
+  rMyLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub ${pPrefix}-lambda-svc-role-${AWS::StackName}
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/${pPrefix}-permission-boundary-managed-policy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /            
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"  
+
+  rMyLambdaFunction:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      Description: "Sample Hello World"
+      FunctionName: !Sub ${pPrefix}-lambda-function-${AWS::StackName}
+      CodeUri: ./lambda_src
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.7
+      MemorySize: 256
+      Timeout: 180
+      Role: !GetAtt rMyLambdaRole.Arn
+
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${pPrefix}-dynamotable-${AWS::StackName}
+      AttributeDefinitions:
+        - AttributeName: "ArtistId"
+          AttributeType: "S"
+        - AttributeName: "Concert"
+          AttributeType: "S"
+      KeySchema: 
+        - AttributeName: "ArtistId"
+          KeyType: "HASH"
+        - AttributeName: "Concert"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref pDBReadCapacity
+        WriteCapacityUnits: !Ref pDBWriteCapacity
