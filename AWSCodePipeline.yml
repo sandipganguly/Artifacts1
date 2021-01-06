@@ -1,0 +1,414 @@
+Description: "This creates a AWSCodePipeline which will deploy CFN template with enfored security control and few best practices"
+
+Parameters:
+
+  pPrefix:
+    Type: String
+    Default: "Demo"
+    Description: "The resource name, created by this template, will be based on this prefix"
+
+  pCodeCommitRepo:
+    Type: String
+    Default: "DemoRepo"
+    Description: "Provide Codecommit Repo where CFN template exists. This CFN template will deployed through the pipeline"
+ 
+  pCodeCommitBranch:
+    Type: String
+    Default: "master"
+    Description: "Provide the branch name which should trigger the pipeline"
+   
+  pCloudformationPackageNeeded: 
+    Type: String  
+    Description: "If you need to zip and upload the source code in S3 bucket using aws cloudformation package command, select True. Else, select False"
+    Default: "True"
+    AllowedValues: 
+      - "True"
+      - "False"
+  
+Conditions:
+  cfn_package_needed: !Equals [ !Ref pCloudformationPackageNeeded, "True" ]
+
+Resources:
+
+  rArtifactStoreS3Location:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  rCodePipelineRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        Fn::Sub: ${pPrefix}-CodePipeline-svc-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        -
+          PolicyName: "codepipelineaccesspolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "cloudformation:*"
+                  - "codebuild:*"
+                  - "codecommit:*"
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*
+                  - !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${rCodeBuildProjectForValidation}
+                  - !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${rCodeBuildProject}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:ListBucket"
+                Resource:
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}/*
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}   
+
+              - Effect: "Allow"
+                Action:
+                  - "iam:PassRole"
+                Resource: 
+                  Fn::GetAtt: [ rCloudFormationRole, Arn ]
+
+  rPermBoundaryPolicy: 
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      Description: "Permission boundary to allow create role with restricted access"
+      ManagedPolicyName: !Sub ${pPrefix}-permission-boundary-managed-policy
+      
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - Sid: "AllowCloudWatchLogAccess"
+            Effect: "Allow"
+            Action: 
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "*"
+            
+          - Sid: "AllowDynamoDBAccess"
+            Effect: "Allow"
+            Action:
+              - "dynamodb:CreateTable"
+              - "dynamodb:DescribeTable"
+              - "dynamodb:DeleteTable"
+            Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${pPrefix}*"
+
+  rCloudFormationRole:
+    Type: "AWS::IAM::Role"
+    Properties: 
+      RoleName:
+        Fn::Sub: ${pPrefix}-cloudformation-svc-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        -
+          PolicyName: "cfnaccesspolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: 
+                  - "iam:Get*"
+                  - "iam:List*"
+                  - "iam:CreatePolicy"
+                  - "iam:CreatePolicyVersion"
+                  - "iam:DeletePolicyVersion"
+                  - "iam:DeletePolicy"
+                  - "iam:DetachRolePolicy"
+                  - "iam:DeleteRole"
+                  - "iam:DeleteRolePolicy"
+                  - "iam:PassRole"
+                Resource: "*"
+              
+              - Effect: "Allow"
+                Action: 
+                  - "iam:CreateRole"
+                  - "iam:AttachRolePolicy"
+                  - "iam:PutRolePermissionsBoundary"
+                  - "iam:PutRolePolicy"
+                Resource: "*"
+                Condition: 
+                  StringEquals:
+                    "iam:PermissionsBoundary": !Ref rPermBoundaryPolicy
+
+
+              - Effect: "Allow"
+                Action: "cloudformation:CreateChangeSet"
+                Resource: !Sub "arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31"
+              
+              - Effect: "Allow"
+                Action: 
+                  - "dynamodb:CreateTable"
+                  - "dynamodb:DescribeTable"
+                  - "dynamodb:DeleteTable"
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${pPrefix}*"
+
+              - Effect: "Allow"
+                Action: 
+                  - "lambda:*"
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${pPrefix}*"
+
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:ListBucket"
+                Resource:
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}/*
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}
+
+  rCodeBuildRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName:
+        Fn::Sub: ${pPrefix}-codebuild-svc-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        -
+          PolicyName: "codebuildaccesspolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "cloudformation:Validate*"
+                Resource: 
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${pPrefix}*"
+
+              - Effect: "Allow"
+                Action: "cloudformation:ValidateTemplate"
+                Resource: "*"
+
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:ListBucket"
+                Resource:
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}/*
+                  - Fn::Sub: arn:aws:s3:::${rArtifactStoreS3Location}
+
+  rCodeBuildProject:
+      Type: AWS::CodeBuild::Project
+      Properties:
+        Name:
+          Fn::Sub: ${pPrefix}-codebuild
+        Artifacts:
+          Type: CODEPIPELINE
+        Description: CodeBuild project for custom command based on buildspec.yml file
+        TimeoutInMinutes: 5
+        Environment:
+          ComputeType: BUILD_GENERAL1_SMALL
+          Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+          Type: LINUX_CONTAINER
+        ServiceRole:
+          Fn::GetAtt: [ rCodeBuildRole, Arn ]
+        Source:
+          Type: CODEPIPELINE
+          BuildSpec: buildspec.yml
+
+  rCodeBuildProjectForValidation:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name:
+        Fn::Sub: ${pPrefix}-codebuild-validate
+      Artifacts:
+        Type: CODEPIPELINE
+      Description: CodeBuild project for hardcoded validation
+      TimeoutInMinutes: 5
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: PACKAGE_NEEDED
+            Value: !Ref pCloudformationPackageNeeded
+          - Name: S3BUCKET_NAME
+            Value: !Ref rArtifactStoreS3Location
+      ServiceRole:
+        Fn::GetAtt: [ rCodeBuildRole, Arn ]
+
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                docker: 18
+              commands:
+                - echo "Installing and upgrading pip..."
+                - pip install --upgrade pip
+
+                - echo "Installing cfn-lint..."
+                - pip install cfn-lint
+
+                - echo "Installing cfn-nag..."
+                - gem install cfn-nag
+   
+            build:
+              commands:
+                - echo Build started on `date`
+
+                - echo "Executing cloudforamtion linting..."
+                - cfn-lint --template template.yml
+
+                - echo "Validating cloudformation template"
+                - aws cloudformation validate-template --template-body file://$(pwd)/template.yml 
+
+                - echo "Executing cfn-nag tool to check insecure infrastructure..."
+                - cfn_nag_scan -i template.yml
+
+                - echo "PACKAGE_NEEDED is set to $PACKAGE_NEEDED"
+                - if [[ ${PACKAGE_NEEDED} == "True" ]]; then aws cloudformation package --template-file template.yml --s3-bucket ${S3BUCKET_NAME} --output-template-file template.packaged.yml ; else echo Its not a python project, skipping packaging; fi
+                
+            post_build:
+              commands:
+                - echo Build completed  on `date`
+          artifacts:
+            files:
+              - '**/*'
+
+  rDeployPipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      Name:
+        Fn::Sub: ${pPrefix}-deploy-pipeline
+      RoleArn:
+          Fn::GetAtt: [ rCodePipelineRole, Arn ]
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: DemoSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                BranchName: !Ref pCodeCommitBranch
+                RepositoryName: !Ref pCodeCommitRepo               
+              RunOrder: 1
+
+        - Name: CodeBuildValidation
+          Actions:
+            - Name: CodeBuild
+              InputArtifacts:
+                - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifactsfromvalidation
+              Configuration:
+                ProjectName:
+                  Ref: rCodeBuildProjectForValidation
+              RunOrder: 1
+        - Name: ProjectBuild
+          Actions:
+            - Name: CodeBuild
+              InputArtifacts:
+                - Name: BuildArtifactsfromvalidation
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifacts
+              Configuration:
+                ProjectName:
+                  Ref: rCodeBuildProject
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployingCFNTemplate
+              InputArtifacts:
+                - Name: BuildArtifacts
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              OutputArtifacts:
+                - Name: CreatedTestCFNStack
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn:
+                  Fn::GetAtt: [ rCloudFormationRole, Arn ]
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+                StackName:
+                  Fn::Sub: ${pPrefix}-stack-name
+                TemplateConfiguration:  "BuildArtifacts::parameter.json"
+                TemplatePath: 
+                  !If 
+                    - cfn_package_needed
+                    - BuildArtifacts::template.packaged.yml
+                    - BuildArtifacts::template.yml
+                ParameterOverrides:
+                  Fn::Join:
+                    - ""
+                    - - "{ \"pPrefix\": \""
+                      - !Sub ${pPrefix}
+                      - "\"}"
+              RunOrder: 1      
+                #  # { "pPrefix":  "pefix" }                  
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: rArtifactStoreS3Location
+
+Outputs:
+    PermissionBoundaryARN:
+      Description: "Permission Boundary ARN"
+      Value: !Ref rPermBoundaryPolicy
+      Export:
+        Name: !Sub "${AWS::StackName}-permboundary"
